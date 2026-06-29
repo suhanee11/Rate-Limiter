@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Distributed Rate Limiter — Live Demo</title>
+    <style>
+        body {
+          font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+          max-width: 720px;
+          margin: 40px auto;
+          background: #0f1117;
+          color: #e6e6e6;
+          padding: 0 20px;
+        }
+        h1 { font-size: 22px; }
+        p.sub { color: #9aa0aa; margin-top: -8px; }
+        button {
+          background: #4c6ef5;
+          color: white;
+          border: none;
+          padding: 10px 18px;
+          border-radius: 6px;
+          font-size: 15px;
+          cursor: pointer;
+          margin-right: 10px;
+        }
+        button:hover { background: #364fc7; }
+        button:disabled { background: #3a3f4b; cursor: not-allowed; }
+        #gauge {
+          margin-top: 20px;
+          font-size: 16px;
+        }
+        #bar {
+          height: 18px;
+          background: #2b2f3a;
+          border-radius: 9px;
+          overflow: hidden;
+          margin-top: 6px;
+        }
+        #bar-fill {
+          height: 100%;
+          background: #4c6ef5;
+          width: 100%;
+          transition: width 0.2s ease;
+        }
+        #log {
+          margin-top: 24px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .tick {
+          width: 28px;
+          height: 28px;
+          border-radius: 6px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 14px;
+          font-weight: bold;
+          color: white;
+        }
+        .allowed { background: #2f9e44; }
+        .blocked { background: #e03131; }
+        #stats { margin-top: 18px; color: #9aa0aa; font-size: 14px; }
+    </style>
+</head>
+<body>
+
+<h1>Distributed Rate Limiter — Live Demo</h1>
+<p class="sub">Token bucket, backed by Redis, fixed against a real concurrency race condition.</p>
+
+<button id="fireOne">Send 1 request</button>
+<button id="fireBurst">Fire 30 requests rapidly</button>
+<button id="reset">Reset client</button>
+
+<div id="gauge">
+    Tokens remaining: <span id="tokenCount">—</span> / <span id="capacity">—</span>
+    <div id="bar"><div id="bar-fill"></div></div>
+</div>
+
+<div id="stats">Allowed: <span id="allowedCount">0</span> &nbsp;|&nbsp; Blocked: <span id="blockedCount">0</span></div>
+
+<div id="log"></div>
+
+<script>
+    const API_BASE = window.location.origin; // same host the page is served from
+    const clientId = "demo-user-" + Math.floor(Math.random() * 1000);
+    let allowed = 0, blocked = 0;
+    let capacity = 10;
+
+    async function sendPing() {
+      const res = await fetch(`${API_BASE}/api/ping?client=${clientId}`);
+      const data = await res.json();
+
+      capacity = data.capacity;
+      document.getElementById("capacity").textContent = capacity;
+      document.getElementById("tokenCount").textContent = data.tokensRemaining.toFixed(1);
+      document.getElementById("bar-fill").style.width =
+        Math.max(0, (data.tokensRemaining / capacity) * 100) + "%";
+
+      if (data.allowed) { allowed++; } else { blocked++; }
+      document.getElementById("allowedCount").textContent = allowed;
+      document.getElementById("blockedCount").textContent = blocked;
+
+      const tick = document.createElement("div");
+      tick.className = "tick " + (data.allowed ? "allowed" : "blocked");
+      tick.textContent = data.allowed ? "✓" : "✕";
+      document.getElementById("log").prepend(tick);
+    }
+
+    document.getElementById("fireOne").addEventListener("click", sendPing);
+
+    document.getElementById("fireBurst").addEventListener("click", async () => {
+      const requests = [];
+      for (let i = 0; i < 30; i++) {
+        requests.push(sendPing());
+      }
+      await Promise.all(requests);
+    });
+
+    document.getElementById("reset").addEventListener("click", () => {
+      allowed = 0; blocked = 0;
+      document.getElementById("allowedCount").textContent = 0;
+      document.getElementById("blockedCount").textContent = 0;
+      document.getElementById("log").innerHTML = "";
+      location.reload();
+    });
+</script>
+
+</body>
+</html>
