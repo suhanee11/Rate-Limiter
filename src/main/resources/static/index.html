@@ -2,128 +2,442 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Distributed Rate Limiter — Live Demo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        :root {
+          --bg: #7DD3FC;
+          --panel: #12151c;
+          --panel-raised: #161a22;
+          --border: #1e242e;
+          --border-bright: #2a323e;
+          --text: #e8e9ec;
+          --text-muted: #8b93a1;
+          --text-dim: #4b525c;
+
+          /* single accent doing double duty: tokens + "go" state */
+          --amber: #f5a623;
+          --amber-dim: #3d2f14;
+          --amber-glow: rgba(245,166,35,0.18);
+
+          /* redis' own red, used ONLY for connection state + blocked */
+          --redis-red: #dc382c;
+          --redis-red-dim: #3a1613;
+
+          --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+          --sans: 'Inter', -apple-system, sans-serif;
+        }
+
+        * { box-sizing: border-box; }
+
         body {
-          font-family: -apple-system, Segoe UI, Roboto, sans-serif;
-          max-width: 720px;
-          margin: 40px auto;
-          background: #0f1117;
-          color: #e6e6e6;
-          padding: 0 20px;
+          font-family: var(--sans);
+          background: var(--bg);
+          background-color: #09090b;
+          background-attachment: fixed;
+          color: var(--text);
+          margin: 0;
+          padding: 44px 20px 80px;
         }
-        h1 { font-size: 22px; }
-        p.sub { color: #9aa0aa; margin-top: -8px; }
-        button {
-          background: #4c6ef5;
-          color: white;
-          border: none;
-          padding: 10px 18px;
-          border-radius: 6px;
-          font-size: 15px;
-          cursor: pointer;
-          margin-right: 10px;
-        }
-        button:hover { background: #364fc7; }
-        button:disabled { background: #3a3f4b; cursor: not-allowed; }
-        #gauge {
-          margin-top: 20px;
-          font-size: 16px;
-        }
-        #bar {
-          height: 18px;
-          background: #2b2f3a;
-          border-radius: 9px;
-          overflow: hidden;
-          margin-top: 6px;
-        }
-        #bar-fill {
-          height: 100%;
-          background: #4c6ef5;
-          width: 100%;
-          transition: width 0.2s ease;
-        }
-        #log {
-          margin-top: 24px;
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-        }
-        .tick {
-          width: 28px;
-          height: 28px;
-          border-radius: 6px;
+
+        .wrap { max-width: 860px; margin: 0 auto; }
+
+        /* ---- terminal connection line, replaces the label-soup status strip ---- */
+        .term-line {
+          font-family: var(--mono);
+          font-size: 12.5px;
+          color: var(--text-muted);
           display: flex;
           align-items: center;
-          justify-content: center;
-          font-size: 14px;
-          font-weight: bold;
-          color: white;
+          gap: 10px;
+          margin-bottom: 30px;
+          padding: 10px 14px;
+          background: #0a0c10;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          width: fit-content;
         }
-        .allowed { background: #2f9e44; }
-        .blocked { background: #e03131; }
-        #stats { margin-top: 18px; color: #9aa0aa; font-size: 14px; }
+        .term-dot {
+          width: 7px; height: 7px; border-radius: 50%;
+          background: var(--redis-red);
+          box-shadow: 0 0 7px var(--redis-red);
+          flex-shrink: 0;
+        }
+
+        .caret {
+          display: inline-block;
+          width: 7px; height: 13px;
+          background: var(--amber);
+          animation: blink 1.1s steps(1) infinite;
+          vertical-align: -2px;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        h1 {
+          font-family: var(--mono);
+          font-size: 27px;
+          font-weight: 800;
+          letter-spacing: -0.02em;
+          margin: 0 0 10px;
+        }
+        .sub {
+          color: var(--text-muted);
+          font-size: 14px;
+          margin: 0 0 32px;
+          max-width: 56ch;
+          line-height: 1.55;
+        }
+        .sub code {
+          font-family: var(--mono);
+          font-size: 12.5px;
+          background: var(--panel-raised);
+          border: 1px solid var(--border-bright);
+          padding: 1px 6px;
+          border-radius: 4px;
+          color: var(--amber);
+        }
+
+        .panel {
+          background: var(--panel);
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          padding: 20px 22px;
+          margin-bottom: 18px;
+        }
+        .panel-label {
+          font-family: var(--mono);
+          font-size: 10.5px;
+          text-transform: uppercase;
+          letter-spacing: 0.09em;
+          color: var(--text-dim);
+          margin-bottom: 14px;
+        }
+
+        /* ---- controls: kept quiet on purpose, this isn't the hero ---- */
+        .config-row { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-end; }
+        .field { display: flex; flex-direction: column; gap: 6px; }
+        .field label { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+        .field .value { font-family: var(--mono); font-size: 19px; font-weight: 600; color: var(--text); }
+        .field input[type="number"] {
+          background: var(--panel-raised);
+          border: 1px solid var(--border-bright);
+          color: var(--text);
+          font-family: var(--mono);
+          font-size: 14px;
+          padding: 7px 10px;
+          border-radius: 5px;
+          width: 90px;
+        }
+        .field input[type="number"]:focus { outline: none; border-color: var(--amber); }
+
+        .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 20px 0 0; }
+        button {
+          background: var(--panel-raised);
+          color: var(--text);
+          border: 1px solid var(--border-bright);
+          padding: 10px 16px;
+          border-radius: 6px;
+          font-family: var(--sans);
+          font-size: 13.5px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: border-color 0.15s ease, background 0.15s ease;
+        }
+        button:hover { border-color: var(--amber); background: #191d27; }
+        button:active { transform: translateY(1px); }
+        button.primary { border-color: var(--amber); color: var(--amber); }
+        button.primary:hover { background: var(--amber-glow); }
+        button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+        /* ---- hero panel: the token state is the one place we spend boldness ---- */
+        .hero-panel {
+          border-color: var(--border-bright);
+          border-left: 3px solid var(--amber);
+          padding: 28px 30px 26px;
+        }
+        .hero-readout {
+          font-family: var(--mono);
+          font-size: 46px;
+          font-weight: 700;
+          line-height: 1;
+          margin-bottom: 4px;
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+        }
+        .hero-readout .cap { color: var(--text-dim); font-size: 22px; font-weight: 500; }
+
+        /* discrete token rail — one segment per token, not an abstract bar */
+        .rail-wrap { margin: 20px 0 16px; }
+        .rail {
+          display: flex;
+          gap: 3px;
+          flex-wrap: wrap;
+        }
+        .seg {
+          height: 20px;
+          flex: 1 1 6px;
+          min-width: 5px;
+          border-radius: 2px;
+          background: var(--panel-raised);
+          border: 1px solid var(--border-bright);
+          transition: background 0.2s ease, border-color 0.2s ease;
+        }
+        .seg.filled { background: var(--amber); border-color: var(--amber); }
+        .seg.partial {
+          background: linear-gradient(90deg, var(--amber) var(--pct, 50%), var(--panel-raised) var(--pct, 50%));
+          border-color: var(--amber);
+        }
+
+        .stat-row {
+          display: flex;
+          gap: 24px;
+          font-family: var(--mono);
+          font-size: 13px;
+          margin-top: 4px;
+        }
+        .stat-row .allowed-stat { color: var(--amber); }
+        .stat-row .blocked-stat { color: var(--redis-red); }
+        .stat-row span.label { color: var(--text-dim); }
+
+        /* the signature detail: this ties the UI back to the actual mechanism */
+        .script-trace {
+          margin-top: 16px;
+          padding-top: 14px;
+          border-top: 1px solid var(--border);
+          font-family: var(--mono);
+          font-size: 11.5px;
+          color: var(--text-dim);
+          display: flex;
+          gap: 8px;
+          align-items: center;
+        }
+        .script-trace .fn { color: var(--text-muted); }
+        .script-trace .ret { font-weight: 700; }
+        .script-trace .ret.ok { color: var(--amber); }
+        .script-trace .ret.no { color: var(--redis-red); }
+
+        /* ---- log ---- */
+        .log-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+        .log-table th {
+          text-align: left; color: var(--text-dim); font-weight: 500; font-size: 10.5px;
+          text-transform: uppercase; letter-spacing: 0.06em;
+          padding: 0 10px 10px; border-bottom: 1px solid var(--border);
+        }
+        .log-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--text-muted); }
+        .log-table tr:first-child td { color: var(--text); }
+        .log-scroll { max-height: 260px; overflow-y: auto; }
+        .log-scroll::-webkit-scrollbar { width: 8px; }
+        .log-scroll::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 4px; }
+        .badge {
+          display: inline-block; font-size: 10.5px; font-weight: 600;
+          padding: 2px 7px; border-radius: 4px; letter-spacing: 0.03em;
+        }
+        .badge.ok { background: var(--amber-dim); color: var(--amber); }
+        .badge.blocked { background: var(--redis-red-dim); color: var(--redis-red); }
+        .log-empty { color: var(--text-dim); font-family: var(--mono); font-size: 12.5px; padding: 12px 0; }
+
+        /* ---- how it works, collapsed by default so the explainer isn't upfront prose ---- */
+        details.panel { cursor: default; }
+        summary {
+          cursor: pointer;
+          font-family: var(--mono);
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          color: var(--text-muted);
+          list-style: none;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        summary::-webkit-details-marker { display: none; }
+        summary::before {
+          content: '▸';
+          font-size: 10px;
+          color: var(--amber);
+          transition: transform 0.15s ease;
+        }
+        details[open] summary::before { transform: rotate(90deg); }
+        .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
+        @media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
+        .compare-col { border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; }
+        .compare-col.bad { border-left: 2px solid var(--redis-red); }
+        .compare-col.good { border-left: 2px solid var(--amber); }
+        .compare-col h3 { font-size: 12.5px; margin: 0 0 8px; font-family: var(--mono); }
+        .compare-col.bad h3 { color: var(--redis-red); }
+        .compare-col.good h3 { color: var(--amber); }
+        .compare-col p { font-size: 13px; color: var(--text-muted); line-height: 1.55; margin: 0; }
+
+        footer {
+          margin-top: 28px;
+          font-family: var(--mono);
+          font-size: 11px;
+          color: var(--text-dim);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          * { transition: none !important; animation: none !important; }
+        }
     </style>
 </head>
 <body>
 
-<h1>Distributed Rate Limiter — Live Demo</h1>
-<p class="sub">Token bucket, backed by Redis, fixed against a real concurrency race condition.</p>
+<div class="wrap">
+    <h1>distributed Rate Limiter</h1>
+    <p class="sub">Token bucket limiting backed by Redis. Checking and decrementing is atomic a single evaluation call, no race window across concurrent requests or app instances.</p>
 
-<button id="fireOne">Send 1 request</button>
-<button id="fireBurst">Fire 30 requests rapidly</button>
-<button id="reset">Reset client</button>
+    <div class="panel">
+        <div class="panel-label">Controls</div>
+        <div class="config-row">
+            <div class="field">
+                <label for="burstSize">Burst Size</label>
+                <input type="number" id="burstSize" value="30" min="1" max="200">
+            </div>
+            <div class="field">
+                <label>Refill Rate</label>
+                <div class="value" id="refillDisplay">2<span style="font-size:13px;color:var(--text-muted);font-weight:400;"> token/sec</span></div>
+            </div>
+        </div>
+        <div class="actions">
+            <button class="primary" id="fireOne">Send 1 request</button>
+            <button id="fireBurst">Fire burst (maxVal-30)</button>
+            <button id="reset">Reset client</button>
+        </div>
+    </div>
 
-<div id="gauge">
-    Tokens remaining: <span id="tokenCount">—</span> / <span id="capacity">—</span>
-    <div id="bar"><div id="bar-fill"></div></div>
+    <div class="panel hero-panel">
+        <div class="panel-label">Token bucket state</div>
+        <div class="hero-readout">
+            <span id="tokenCount">—</span><span class="cap">/ <span id="capacity">—</span> tokens</span>
+        </div>
+        <div class="rail-wrap">
+            <div class="rail" id="rail"></div>
+        </div>
+        <div class="stat-row">
+            <span><span class="label">allowed</span> <span class="allowed-stat" id="allowedCount">0</span></span>
+            <span><span class="label">blocked</span> <span class="blocked-stat" id="blockedCount">0</span></span>
+        </div>
+        <div class="script-trace" id="scriptTrace">
+            <span id="scriptRet" class="ret"></span>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-label">Request log</div>
+        <div class="log-scroll">
+            <table class="log-table">
+                <thead>
+                <tr><th>#</th><th>time</th><th>status</th><th>latency</th><th>tokens left</th></tr>
+                </thead>
+                <tbody id="logBody"></tbody>
+            </table>
+            <div class="log-empty" id="logEmpty">No requests sent yet.</div>
+        </div>
+    </div>
+
+    <details class="panel">
+        <summary>How this works :- naive vs. atomic</summary>
+        <div class="compare">
+            <div class="compare-col bad">
+                <h3>✕ naive implementation</h3>
+                <p>Checking token availability and decrementing happen as two separate steps. When requests overlap in timing, multiple clients can read the same count before either finishes updating it — so more requests get through than the bucket actually has room for.</p>
+            </div>
+            <div class="compare-col good">
+                <h3>✓ atomic fix</h3>
+                <p>The check and decrement happen as one step inside a single Redis Lua script. Redis runs it start-to-finish with nothing allowed to interleave — so no two requests ever read the same stale count, even across multiple app instances.</p>
+            </div>
+        </div>
+    </details>
+
+    <footer id="footerClient">client id pending</footer>
+
 </div>
 
-<div id="stats">Allowed: <span id="allowedCount">0</span> &nbsp;|&nbsp; Blocked: <span id="blockedCount">0</span></div>
-
-<div id="log"></div>
-
 <script>
-    const API_BASE = window.location.origin; // same host the page is served from
+    const API_BASE = window.location.origin;
     const clientId = "demo-user-" + Math.floor(Math.random() * 1000);
-    let allowed = 0, blocked = 0;
-    let capacity = 10;
+    document.getElementById("footerClient").textContent = "client: " + clientId;
+
+    let allowed = 0, blocked = 0, requestNum = 0, capacity = 10;
+    const logBody = document.getElementById("logBody");
+    const logEmpty = document.getElementById("logEmpty");
+    const rail = document.getElementById("rail");
+    const scriptRet = document.getElementById("scriptRet");
+
+    function fmtTime(d) {
+      return d.toTimeString().split(" ")[0] + "." + String(d.getMilliseconds()).padStart(3, "0");
+    }
+
+    function renderRail(remaining, cap) {
+      const segCount = Math.min(cap, 60); // cap segment count for very large buckets
+      const scale = cap / segCount;
+      let html = "";
+      for (let i = 0; i < segCount; i++) {
+        const segFloor = i * scale;
+        const segCeil = (i + 1) * scale;
+        if (remaining >= segCeil) {
+          html += `<div class="seg filled"></div>`;
+        } else if (remaining > segFloor) {
+          const pct = ((remaining - segFloor) / scale) * 100;
+          html += `<div class="seg partial" style="--pct:${pct}%"></div>`;
+        } else {
+          html += `<div class="seg"></div>`;
+        }
+      }
+      rail.innerHTML = html;
+    }
 
     async function sendPing() {
+      requestNum++;
+      const start = performance.now();
       const res = await fetch(`${API_BASE}/api/ping?client=${clientId}`);
+      const latency = (performance.now() - start).toFixed(1);
       const data = await res.json();
 
       capacity = data.capacity;
       document.getElementById("capacity").textContent = capacity;
       document.getElementById("tokenCount").textContent = data.tokensRemaining.toFixed(1);
-      document.getElementById("bar-fill").style.width =
-        Math.max(0, (data.tokensRemaining / capacity) * 100) + "%";
+      renderRail(data.tokensRemaining, capacity);
 
       if (data.allowed) { allowed++; } else { blocked++; }
       document.getElementById("allowedCount").textContent = allowed;
       document.getElementById("blockedCount").textContent = blocked;
 
-      const tick = document.createElement("div");
-      tick.className = "tick " + (data.allowed ? "allowed" : "blocked");
-      tick.textContent = data.allowed ? "✓" : "✕";
-      document.getElementById("log").prepend(tick);
+      scriptRet.textContent = `→ ${data.allowed ? 1 : 0} (${data.allowed ? "allowed" : "denied"})`;
+      scriptRet.className = "ret " + (data.allowed ? "ok" : "no");
+
+      logEmpty.style.display = "none";
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td>${requestNum}</td>
+        <td>${fmtTime(new Date())}</td>
+        <td><span class="badge ${data.allowed ? "ok" : "blocked"}">${data.allowed ? "allowed" : "blocked"}</span></td>
+        <td>${latency}ms</td>
+        <td>${data.tokensRemaining.toFixed(1)}</td>
+      `;
+      logBody.prepend(row);
+      while (logBody.children.length > 60) logBody.removeChild(logBody.lastChild);
     }
 
     document.getElementById("fireOne").addEventListener("click", sendPing);
 
     document.getElementById("fireBurst").addEventListener("click", async () => {
+      const n = Math.max(1, Math.min(200, parseInt(document.getElementById("burstSize").value) || 30));
       const requests = [];
-      for (let i = 0; i < 30; i++) {
-        requests.push(sendPing());
-      }
+      for (let i = 0; i < n; i++) requests.push(sendPing());
       await Promise.all(requests);
     });
 
     document.getElementById("reset").addEventListener("click", () => {
-      allowed = 0; blocked = 0;
+      allowed = 0; blocked = 0; requestNum = 0;
       document.getElementById("allowedCount").textContent = 0;
       document.getElementById("blockedCount").textContent = 0;
-      document.getElementById("log").innerHTML = "";
+      logBody.innerHTML = "";
+      logEmpty.style.display = "block";
       location.reload();
     });
 </script>
